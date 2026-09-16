@@ -102,4 +102,8 @@
 			},
 		],
 	},
+	"vars": {
+	    "CF_EMAIL": "antonioivanovski@protonmail.com",
+	    "GITHUB_UPDATE_REPO": "antonio-ivanovski/mailflare"
+	},
 }
