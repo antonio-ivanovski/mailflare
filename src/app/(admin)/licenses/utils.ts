@@ -1,24 +1,26 @@
 import { Building2, Sparkles } from "lucide-react";
 import type { LicensePlan } from "./types";
 import { authFetch } from "@/lib/auth/client";
+import { formatUserDate } from "@/lib/time/utils";
 import { LICENSE_STATUS_CHANGED_EVENT } from "@/lib/licenses/constants";
 import type { ActivatableLicensePlan, LicenseAction, LicenseResponse } from "./types";
 
 export const LICENSE_PLANS: LicensePlan[] = [
 	{
 		name: "Pro",
-		price: 19,
+		price: 29,
 		originalPrice: 39,
-		description: "A perpetual license for one account, including one year of product updates.",
-		features: ["Custom branding", "All future Pro features", "One year of updates", "Keep the licensed version forever"],
+		description: "A one-time license for one account, including one year of product updates.",
+		features: ["Custom branding", "All future Pro features", "Keep the licensed version forever"],
 		icon: Sparkles,
 		checkoutUrl: "https://app.paymug.co/buy/mailflare-pro",
 	},
 	{
 		name: "Team",
 		price: 249,
-		description: "A perpetual multi-account license with every Pro capability and one year of updates.",
-		features: ["Everything in Pro", "Add and manage other accounts", "Shared mailbox access as available", "One year of updates", "Keep the licensed version forever"],
+		originalPrice: 349,
+		description: "A one-time multi-account license with every Pro capability",
+		features: ["Everything in Pro", "Add and manage other accounts", "Shared mailbox access as available", "Keep the licensed version forever"],
 		icon: Building2,
 		checkoutUrl: "https://app.paymug.co/buy/mailflare-team",
 	},
@@ -53,5 +55,5 @@ export function formatLicensePlan(plan: string): string {
 
 export function formatLicenseDate(value: Date | string | null): string | null {
 	if (!value) return null;
-	return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+	return formatUserDate(value, { dateStyle: "medium", timeStyle: "short" });
 }

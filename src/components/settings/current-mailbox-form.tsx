@@ -63,7 +63,7 @@ export function CurrentMailboxForm() {
 	if (!selectedMailbox) {
 		return (
 			<div className="space-y-6">
-				<h1 className="text-3xl font-medium text-neutral-900">Settings</h1>
+				<h1 className="text-2xl md:text-3xl font-medium text-neutral-900">Settings</h1>
 				<Card className="rounded-3xl border-0 bg-white p-6">
 					<CardContent className="p-6 text-sm text-neutral-500">
 						Select a mailbox to view its settings.
@@ -79,7 +79,7 @@ export function CurrentMailboxForm() {
 	return (
 		<div className="space-y-8">
 			<div>
-				<h1 className="text-3xl font-medium text-neutral-900">Settings</h1>
+				<h1 className="text-2xl md:text-3xl font-medium text-neutral-900">Settings</h1>
 				<p className="mt-1 text-sm text-neutral-500">{address}</p>
 			</div>
 
@@ -88,6 +88,7 @@ export function CurrentMailboxForm() {
 						mailboxId={selectedMailbox.id}
 						initialHasAvatar={!!selectedMailbox.hasAvatar}
 						name={selectedMailbox.displayName || selectedMailbox.localPart}
+						colorSeed={address}
 					/>
 					<form onSubmit={onSubmit} className="space-y-4">
 						<div className="space-y-2">

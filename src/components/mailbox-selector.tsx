@@ -2,12 +2,16 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { CalendarDays, Check, LogOut, Settings, ShieldCheck, UserRound, UsersRound } from "lucide-react";
+import { CalendarDays, Check, ChevronDown, Inbox, LogOut, Settings, ShieldCheck, UserPlus, UserRound, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useSelectedMailbox } from "@/components/mailbox-provider";
+import { ProgressiveAvatarImage } from "@/components/progressive-avatar-image";
+import { isIdentityMailbox } from "@/components/mailbox-provider-utils";
 import { useMessageCounts } from "@/hooks/use-message-counts";
 import { authFetch } from "@/lib/auth/client";
+import { getAvatarColorStyle } from "@/lib/avatar-colors";
 import { logoutClientSession } from "@/lib/auth/logout";
+import { fetchBrowserAccounts, switchBrowserAccount, type BrowserAccount } from "@/lib/auth/accounts-client";
 import {
 	PROFILE_AVATAR_CHANGED_EVENT,
 	getProfileAvatarUrl,
@@ -22,6 +26,7 @@ import type {
 	AccountAvatarProps,
 	MailboxAccountRowProps,
 	MailboxSelectorUser,
+	MailboxSelectorProps,
 } from "./mailbox-selector-types";
 import {
 	getAccountInitial,
@@ -32,6 +37,7 @@ import {
 
 function AccountAvatar({
 	name,
+	colorSeed = name,
 	hasAvatar = false,
 	avatarUrl = "/api/profile/avatar",
 	size = "small",
@@ -46,8 +52,7 @@ function AccountAvatar({
 
 	if (hasAvatar && !imageFailed) {
 		return (
-			// eslint-disable-next-line @next/next/no-img-element
-			<img
+			<ProgressiveAvatarImage
 				src={avatarUrl}
 				alt={`${name} profile picture`}
 				className={`${sizeClass} shrink-0 rounded-full border border-neutral-200 object-cover`}
@@ -62,6 +67,7 @@ function AccountAvatar({
 	return (
 		<div
 			className={`${sizeClass} flex shrink-0 items-center justify-center rounded-full bg-blue-600 font-semibold text-white`}
+			style={getAvatarColorStyle(colorSeed)}
 			aria-hidden="true"
 		>
 			{getAccountInitial(name)}
@@ -80,6 +86,7 @@ function MailboxAccountRow({ mailbox, unread, avatarUrl, onSelect }: MailboxAcco
 		>
 			<AccountAvatar
 				name={name}
+				colorSeed={getMailboxAddress(mailbox)}
 				hasAvatar={!!mailbox.hasAvatar || !!avatarUrl}
 				avatarUrl={avatarUrl ?? `/api/mailboxes/${mailbox.id}/avatar`}
 			/>
@@ -105,15 +112,29 @@ function MailboxAccountRow({ mailbox, unread, avatarUrl, onSelect }: MailboxAcco
 	);
 }
 
-export function MailboxSelector() {
+export function MailboxSelector({ initialUser }: MailboxSelectorProps = {}) {
 	const { selectedMailbox, setSelectedMailbox, mailboxes, isLoading } = useSelectedMailbox();
 	const pathname = usePathname();
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
-	const [user, setUser] = useState<MailboxSelectorUser | null>(null);
-	const [hasAvatar, setHasAvatar] = useState(false);
+	const [user, setUser] = useState<MailboxSelectorUser | null>(initialUser ?? null);
+	const [hasAvatar, setHasAvatar] = useState(!!initialUser?.hasAvatar);
 	const [avatarUrl, setAvatarUrl] = useState("/api/profile/avatar");
 	const [mailboxAvatarUrls, setMailboxAvatarUrls] = useState<Record<string, string>>({});
+	const [inboxesOpen, setInboxesOpen] = useState(false);
+	const [browserAccounts, setBrowserAccounts] = useState<BrowserAccount[]>([]);
+
+	useEffect(() => {
+		if (!open) return;
+		let active = true;
+		void fetchBrowserAccounts().then((accounts) => {
+			if (active) setBrowserAccounts(accounts);
+		});
+		return () => {
+			active = false;
+		};
+	}, [open]);
+	const otherAccounts = browserAccounts.filter((account) => !account.active && account.userId !== user?.id);
 	const ref = useRef<HTMLDivElement>(null);
 	const { counts } = useMessageCounts(null, open);
 
@@ -142,11 +163,21 @@ export function MailboxSelector() {
 			const detail = (event as CustomEvent<ProfileAvatarChangedDetail>).detail;
 			setAvatarUrl(detail?.url ?? getProfileAvatarUrl());
 			setHasAvatar(true);
+			setMailboxAvatarUrls((current) => {
+				const next = { ...current };
+				const version = Date.now();
+				for (const mailbox of mailboxes) {
+					if (isIdentityMailbox(mailbox)) {
+						next[mailbox.id] = `/api/mailboxes/${mailbox.id}/avatar?v=${version}`;
+					}
+				}
+				return next;
+			});
 		}
 
 		window.addEventListener(PROFILE_AVATAR_CHANGED_EVENT, onAvatarChanged);
 		return () => window.removeEventListener(PROFILE_AVATAR_CHANGED_EVENT, onAvatarChanged);
-	}, []);
+	}, [mailboxes]);
 
 	useEffect(() => {
 		function onNameChanged(event: Event) {
@@ -172,7 +203,7 @@ export function MailboxSelector() {
 		return () => window.removeEventListener(MAILBOX_AVATAR_CHANGED_EVENT, onMailboxAvatarChanged);
 	}, []);
 
-	if (isLoading) {
+	if (isLoading && !initialUser) {
 		return <Skeleton className="h-10 w-10 rounded-full" />;
 	}
 
@@ -191,9 +222,20 @@ export function MailboxSelector() {
 	const adminActive = isAdminPath(pathname);
 
 	async function logout() {
-		await logoutClientSession();
+		const switched = await logoutClientSession();
 		setOpen(false);
-		router.replace("/login");
+		router.replace(switched ? "/inbox" : "/login");
+		router.refresh();
+	}
+
+	async function switchAccount(userId: string) {
+		const error = await switchBrowserAccount(userId);
+		setOpen(false);
+		if (error) {
+			router.push("/login?add=1");
+			return;
+		}
+		router.replace("/inbox");
 		router.refresh();
 	}
 
@@ -208,6 +250,7 @@ export function MailboxSelector() {
 			>
 				<AccountAvatar
 					name={selectedName}
+					colorSeed={selectedEmail || selectedName}
 					hasAvatar={selectedHasAvatar}
 					avatarUrl={selectedAvatarUrl}
 					onAvatarError={() => {
@@ -217,11 +260,12 @@ export function MailboxSelector() {
 			</button>
 
 			{open && (
-				<div className="absolute right-0 top-14 z-50 w-[360px] overflow-hidden rounded-[28px] border border-neutral-200 bg-[#eef3fb] p-3 shadow-2xl shadow-neutral-900/20">
+				<div className="absolute right-0 top-14 w-[360px] overflow-hidden rounded-[28px] border border-neutral-200 bg-[#eef3fb] p-3 shadow-2xl shadow-neutral-900/20 max-h-[82vh] overflow-y-auto z-90">
 					<div className="rounded-[22px] bg-white px-5 py-5">
 						<div className="flex items-center gap-4">
 							<AccountAvatar
 								name={selectedName}
+								colorSeed={selectedEmail || selectedName}
 								hasAvatar={selectedHasAvatar}
 								avatarUrl={selectedAvatarUrl}
 								size="large"
@@ -247,11 +291,19 @@ export function MailboxSelector() {
 							<Check className="h-5 w-5 shrink-0 text-blue-600" />
 						</div>
 						<Link
-							href="/calendar"
+							href="/inbox"
 							onClick={() => setOpen(false)}
 							className="mt-4 flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-[#f2f6fc]"
 						>
-							<CalendarDays className="h-5 w-5 text-neutral-600" />
+							<Inbox size={18} className="text-neutral-600" />
+							Inbox
+						</Link>
+						<Link
+							href="/calendar"
+							onClick={() => setOpen(false)}
+							className="mt-1 flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-[#f2f6fc]"
+						>
+							<CalendarDays size={18} className="text-neutral-600" />
 							Calendar
 						</Link>
 						<Link
@@ -259,31 +311,64 @@ export function MailboxSelector() {
 							onClick={() => setOpen(false)}
 							className="mt-1 flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-[#f2f6fc]"
 						>
-							<Settings className="h-5 w-5 text-neutral-600" />
+							<Settings size={18} className="text-neutral-600" />
 							Settings
 						</Link>
+						{otherMailboxes.length > 0 && (
+							<div className="mt-3 border-t border-neutral-100 pt-2">
+								<button
+									type="button"
+									onClick={() => setInboxesOpen((value) => !value)}
+									aria-expanded={inboxesOpen}
+									className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-500 hover:bg-[#f2f6fc]"
+								>
+									Inboxes ({otherMailboxes.length})
+									<ChevronDown size={16} className={`transition-transform ${inboxesOpen ? "rotate-180" : ""}`} />
+								</button>
+								{inboxesOpen && otherMailboxes.map((mailbox) => {
+									const mailboxCount = counts.mailboxes.find((count) => count.mailboxId === mailbox.id);
+									return (
+										<MailboxAccountRow
+											key={mailbox.id}
+											mailbox={mailbox}
+											unread={mailboxCount?.unread ?? 0}
+											avatarUrl={mailboxAvatarUrls[mailbox.id]}
+											onSelect={() => {
+												setSelectedMailbox(mailbox);
+												setOpen(false);
+												router.push("/inbox");
+											}}
+										/>
+									);
+								})}
+							</div>
+						)}
 					</div>
 
-					{otherMailboxes.length > 0 && (
+					{otherAccounts.length > 0 && (
 						<div className="mt-2 rounded-[22px] bg-white/55 p-1">
 							<p className="px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
 								Other accounts
 							</p>
-							{otherMailboxes.map((mailbox) => {
-								const mailboxCount = counts.mailboxes.find((count) => count.mailboxId === mailbox.id);
-								return (
-									<MailboxAccountRow
-										key={mailbox.id}
-										mailbox={mailbox}
-										unread={mailboxCount?.unread ?? 0}
-										avatarUrl={mailboxAvatarUrls[mailbox.id]}
-										onSelect={() => {
-											setSelectedMailbox(mailbox);
-											setOpen(false);
-										}}
+							{otherAccounts.map((account) => (
+								<button
+									key={account.userId}
+									type="button"
+									onClick={() => void switchAccount(account.userId)}
+									className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-white"
+								>
+									<AccountAvatar
+										name={account.name}
+										colorSeed={account.email}
+										hasAvatar={account.hasAvatar}
+										avatarUrl={`/api/auth/accounts/${account.userId}/avatar`}
 									/>
-								);
-							})}
+									<div className="min-w-0 flex-1">
+										<p className="truncate text-sm font-semibold text-neutral-900">{account.name}</p>
+										<p className="truncate text-xs text-neutral-500">{account.email}</p>
+									</div>
+								</button>
+							))}
 						</div>
 					)}
 
@@ -294,17 +379,25 @@ export function MailboxSelector() {
 								onClick={() => setOpen(false)}
 								className={`flex items-center gap-3 border-t border-neutral-100 px-5 py-4 text-sm font-medium text-neutral-800 hover:bg-[#f2f6fc] ${adminActive ? "bg-blue-50" : ""}`}
 							>
-								<ShieldCheck className="h-5 w-5 text-neutral-600" />
+								<ShieldCheck size={18} className="text-neutral-600" />
 								Admin
 								{adminActive && <Check className="ml-auto h-4 w-4 text-blue-600" />}
 							</Link>
 						)}
+						<Link
+							href="/login?add=1"
+							onClick={() => setOpen(false)}
+							className="flex items-center gap-3 px-5 py-4 text-sm font-medium text-neutral-800 hover:bg-[#f2f6fc]"
+						>
+							<UserPlus size={18} className="text-neutral-600" />
+							Add another account
+						</Link>
 						<button
 							type="button"
 							onClick={logout}
 							className="flex w-full items-center gap-3 border-t border-neutral-100 px-5 py-4 text-left text-sm font-medium text-neutral-800 hover:bg-[#f2f6fc]"
 						>
-							<LogOut className="h-5 w-5 text-neutral-600" />
+							<LogOut size={18} className="text-neutral-600" />
 							Sign out
 						</button>
 					</div>

@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
-import { eq, desc, and, like, or, count, isNull, inArray, lte, gt } from "drizzle-orm";
+import { eq, desc, and, or, count, isNull, isNotNull, inArray, lte, gt, notInArray, ne, sql, sum } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { getEnv } from "@/lib/cloudflare";
 import { getCurrentUser } from "@/lib/auth/cookies";
 import { getDb } from "@/db";
 import { messages } from "@/db/schema";
 import { getContactDisplayNameMap } from "@/lib/contacts/service";
-import { normalizeEmailAddress } from "@/lib/email/address";
-import { buildSnippet } from "@/lib/email/parse";
+import { getFirstEmailAddressEntry, normalizeEmailAddress } from "@/lib/email/address";
 import { getMailboxAccessLevel, listAccessibleMailboxes } from "@/lib/mailboxes/access";
+import { tracksAccountIdentity } from "@/lib/profile/identity-utils";
+import { buildSearchConditions } from "@/lib/search/conditions";
+import { getRequestTimeZone } from "@/lib/time/utils";
+import { getMessageListColumns, loadConversationPage } from "./utils";
+import type { ListMessage } from "./types";
 
 export async function GET(request: Request) {
 	const env = getEnv();
@@ -29,6 +33,9 @@ export async function GET(request: Request) {
 	const snoozed = url.searchParams.get("snoozed");
 	const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 100);
 	const offset = Math.max(Number(url.searchParams.get("offset") ?? 0), 0);
+	// Conversation view: one row per thread, represented by its newest message
+	// that matches the filter. Drafts are never grouped.
+	const groupByThread = url.searchParams.get("group") === "thread" && status !== "draft";
 
 	const db = getDb(env);
 	const accessibleMailboxes = await listAccessibleMailboxes(db, user);
@@ -54,6 +61,10 @@ export async function GET(request: Request) {
 	if (status) {
 		conditions.push(eq(messages.status, status));
 	}
+	// Composer templates are stored as messages but never listed.
+	if (status !== "template") {
+		conditions.push(ne(messages.status, "template"));
+	}
 	if (status === "received" && !folderId) {
 		conditions.push(isNull(messages.folderId));
 		conditions.push(or(isNull(messages.snoozedUntil), lte(messages.snoozedUntil, new Date()))!);
@@ -72,36 +83,83 @@ export async function GET(request: Request) {
 	if (read === "unread") {
 		conditions.push(eq(messages.read, false));
 	}
-	if (query) {
-		const pattern = `%${query}%`;
-		const queryCondition = or(
-			like(messages.fromAddr, pattern),
-			like(messages.toAddr, pattern),
-			like(messages.subject, pattern),
-			like(messages.snippet, pattern),
-		);
-		if (queryCondition) conditions.push(queryCondition);
-	}
-	if (title) {
-		conditions.push(like(messages.subject, `%${title}%`));
+	if (query || title) {
+		// Operators (from:, has:attachment, before:) and free text go through the
+		// full-text index; `title` is the legacy subject filter and is folded in.
+		conditions.push(...buildSearchConditions(title ? `${query ?? ""} subject:"${title}"` : query ?? "", getRequestTimeZone(request, user.timeZone)));
 	}
 	const where = and(...conditions);
+	// Messages that were never threaded (older rows, drafts) stand alone.
+	const threadKey = sql<string>`coalesce(${messages.threadId}, ${messages.id})`;
 
-	const [totalRow] = await db
-		.select({ total: count() })
-		.from(messages)
-		.where(where);
-	const rows = await db
-		.select()
-		.from(messages)
-		.where(where)
-		.orderBy(desc(messages.createdAt))
-		.limit(limit)
-		.offset(offset);
+	// The list renders `snippet`. Bodies stay on the thread endpoint.
+	const messageListColumns = getMessageListColumns();
+
+	let total = 0;
+	let rows: ListMessage[];
+	// Which stored messages each visible row stands for, so acting on a
+	// conversation row acts on the whole conversation within this folder.
+	const threadMessageIds = new Map<string, string[]>();
+	if (groupByThread) {
+		const page = await loadConversationPage({ db, where, offset, limit });
+		total = page.total;
+		rows = page.ids.length
+			? await db.select(messageListColumns).from(messages).where(and(where, inArray(messages.id, page.ids)))
+			: [];
+		const rowById = new Map(rows.map((row) => [row.id, row]));
+		rows = page.ids.map((id) => rowById.get(id)).filter((row): row is ListMessage => !!row);
+		const keys = rows.map((row) => row.threadId ?? row.id);
+		if (keys.length > 0) {
+			const members = await db
+				.select({ id: messages.id, key: threadKey })
+				.from(messages)
+				.where(and(where, inArray(threadKey, keys)));
+			for (const member of members) {
+				const list = threadMessageIds.get(member.key) ?? [];
+				list.push(member.id);
+				threadMessageIds.set(member.key, list);
+			}
+		}
+	} else {
+		const [totalRow] = await db.select({ total: count() }).from(messages).where(where);
+		total = totalRow?.total ?? 0;
+		rows = await db
+			.select(messageListColumns)
+			.from(messages)
+			.where(where)
+			.orderBy(desc(messages.createdAt))
+			.limit(limit)
+			.offset(offset);
+	}
+	// Conversation sizes for the rows on this page, so the list can show "(3)"
+	// next to a subject the way threaded clients do.
+	const threadIds = Array.from(new Set(rows.map((row) => row.threadId).filter((id): id is string => !!id)));
+	const threadCounts = new Map<string, { total: number; unread: number }>();
+	if (threadIds.length > 0) {
+		const scope = mailboxId
+			? eq(messages.mailboxId, mailboxId)
+			: accessibleMailboxIds.length > 0
+				? inArray(messages.mailboxId, accessibleMailboxIds)
+				: eq(messages.userId, user.id);
+		const countRows = await db
+			.select({
+				threadId: messages.threadId,
+				total: count(),
+				unread: sum(sql`case when ${messages.read} = 0 then 1 else 0 end`),
+			})
+			.from(messages)
+			.where(and(scope, inArray(messages.threadId, threadIds), isNotNull(messages.threadId), notInArray(messages.status, ["draft", "trash"])))
+			.groupBy(messages.threadId);
+		for (const row of countRows) {
+			if (row.threadId) threadCounts.set(row.threadId, { total: row.total, unread: Number(row.unread ?? 0) });
+		}
+	}
 	const mailboxNameMap = new Map(
 		accessibleMailboxes.map((mailbox) => [
 			mailbox.id,
-			mailbox.displayName ?? mailbox.localPart,
+			mailbox.userId === user.id && tracksAccountIdentity(mailbox, user.email)
+				? user.name
+				: mailbox.displayName ?? mailbox.localPart,
 		]),
 	);
 	const contactMapsByUserId = new Map(
@@ -113,24 +171,32 @@ export async function GET(request: Request) {
 					userId,
 					rows
 						.filter((message) => message.userId === userId)
-						.flatMap((message) => [message.fromAddr, message.toAddr]),
+						.flatMap((message) => [message.fromAddr, getFirstEmailAddressEntry(message.toAddr)]),
 				),
 			] as const),
 		),
 	);
+	// `Message.textBody`/`htmlBody` are optional on the wire type and the
+	// reading pane loads them from /api/messages/[id]/thread, so they are
+	// neither selected nor sent here.
 	const enrichedRows = rows.map(({ rawR2Key: _rawR2Key, ...message }) => {
 		const contactMap = contactMapsByUserId.get(message.userId);
 		const accountName = message.mailboxId ? mailboxNameMap.get(message.mailboxId) : null;
 		return {
 			...message,
-			snippet: buildSnippet(message.textBody, message.htmlBody) || message.snippet,
+			snippet: message.snippet,
 			fromContactName:
 				(message.direction === "outbound" ? accountName : null) ??
 				contactMap?.get(normalizeEmailAddress(message.fromAddr)) ??
 				null,
-			toContactName: contactMap?.get(normalizeEmailAddress(message.toAddr)) ?? null,
+			toContactName: contactMap?.get(normalizeEmailAddress(getFirstEmailAddressEntry(message.toAddr))) ?? null,
+			threadCount: (message.threadId && threadCounts.get(message.threadId)?.total) || 1,
+			threadUnread: (message.threadId && threadCounts.get(message.threadId)?.unread) || 0,
+			...(groupByThread
+				? { threadMessageIds: threadMessageIds.get(message.threadId ?? message.id) ?? [message.id] }
+				: {}),
 		};
 	});
 
-	return NextResponse.json({ messages: enrichedRows, total: totalRow?.total ?? 0, limit, offset });
+	return NextResponse.json({ messages: enrichedRows, total, limit, offset, grouped: groupByThread });
 }

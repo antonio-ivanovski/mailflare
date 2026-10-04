@@ -17,6 +17,7 @@ const buttonVariants = cva(
 				default: "h-10 px-6 py-2 rounded-xl",
 				sm: "h-8 rounded-lg px-3 text-xs",
 				lg: "h-11 rounded-xl px-8",
+				roundedSM: "rounded-full p-2 text-xs"
 			},
 		},
 		defaultVariants: {
@@ -28,14 +29,14 @@ const buttonVariants = cva(
 
 export interface ButtonProps
 	extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-		VariantProps<typeof buttonVariants> {
+	VariantProps<typeof buttonVariants> {
 	asChild?: boolean;
 }
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 	({ className, variant, size, asChild = false, ...props }, ref) => {
 		const Comp = asChild ? Slot : "button";
-		return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />;
+		return <Comp className={cn('cursor-pointer', buttonVariants({ variant, size, className }))} ref={ref} {...props} />;
 	},
 );
 Button.displayName = "Button";

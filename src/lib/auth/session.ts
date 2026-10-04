@@ -1,4 +1,4 @@
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, ne } from "drizzle-orm";
 import { newId } from "@/lib/ids";
 import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
@@ -21,8 +21,7 @@ export async function createSession(env: CloudflareEnv, userId: string): Promise
 	const db = getDb(env);
 	const token = generateSessionToken();
 	const tokenHash = await hashSessionToken(token);
-	const expiresAt = new Date();
-	expiresAt.setDate(expiresAt.getDate() + SESSION_DAYS);
+	const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000);
 
 	await db.insert(sessions).values({
 		id: newId(),
@@ -55,4 +54,27 @@ export async function deleteSession(env: CloudflareEnv, token: string): Promise<
 	const db = getDb(env);
 	const tokenHash = await hashSessionToken(token);
 	await db.delete(sessions).where(eq(sessions.tokenHash, tokenHash));
+}
+
+/**
+ * Sign the user out everywhere, optionally keeping the session that made the
+ * request. Used after a password change or reset and when MFA is switched on.
+ */
+export async function deleteUserSessions(env: CloudflareEnv, userId: string, keepToken?: string): Promise<void> {
+	const db = getDb(env);
+	if (keepToken) {
+		const keepHash = await hashSessionToken(keepToken);
+		await db.delete(sessions).where(and(eq(sessions.userId, userId), ne(sessions.tokenHash, keepHash)));
+		return;
+	}
+	await db.delete(sessions).where(eq(sessions.userId, userId));
+}
+
+/** The session token a request carries, from the Bearer header or the cookie. */
+export function getSessionTokenFromRequestHeaders(request: Request): string | undefined {
+	const authorization = request.headers.get("Authorization");
+	if (authorization?.startsWith("Bearer ")) return authorization.slice(7).trim() || undefined;
+	const cookie = request.headers.get("Cookie") ?? "";
+	const match = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
+	return match ? decodeURIComponent(match[1]) : undefined;
 }

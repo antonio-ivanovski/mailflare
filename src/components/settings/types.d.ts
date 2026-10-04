@@ -7,6 +7,7 @@ export type ProfileFormProps = {
 export type ProfileFormResponse = {
 	user?: {
 		name: string;
+		timeZone: string | null;
 		resetEmail: string | null;
 		forwardingEmail: string | null;
 		canForwardEmail: boolean;
@@ -16,12 +17,32 @@ export type ProfileFormResponse = {
 
 export type AccountSettingsResponse = {
 	user?: {
+		id: string;
 		email: string;
 		name: string;
 		resetEmail: string | null;
 		forwardingEmail: string | null;
 		canForwardEmail: boolean;
 	};
+	error?: unknown;
+};
+
+export type MfaStatusResponse = {
+	enabled: boolean;
+	confirmedAt: string | null;
+	recoveryCodesLeft: number;
+	error?: unknown;
+};
+
+export type MfaEnrollmentResponse = {
+	secret?: string;
+	otpauthUrl?: string;
+	qrSvg?: string;
+	error?: unknown;
+};
+
+export type MfaRecoveryCodesResponse = {
+	recoveryCodes?: string[];
 	error?: unknown;
 };
 
@@ -80,6 +101,7 @@ export type ProfileAvatarFormProps = {
 	mailboxId?: string;
 	initialHasAvatar?: boolean;
 	name?: string;
+	colorSeed?: string;
 };
 
 export type CurrentMailboxFormResponse = {

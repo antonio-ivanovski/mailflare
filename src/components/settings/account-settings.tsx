@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChangePasswordForm } from "./change-password-form";
 import { ForwardingEmailForm } from "./forwarding-email-form";
 import { MailboxSignatureForm } from "./mailbox-signature-form";
 import { ProfileForm } from "./profile-form";
+import { TimeZoneForm } from "./time-zone-form";
 import type { AccountSettingsResponse } from "./types";
 import { loadAccountSettings } from "./utils";
 
@@ -45,7 +45,7 @@ export function AccountSettings() {
 	return (
 		<div className="space-y-8 py-4">
 			{/* <div>
-				<h1 className="text-3xl font-medium text-neutral-900">Account</h1>
+				<h1 className="text-2xl md:text-3xl font-medium text-neutral-900">Account</h1>
 				<p className="mt-1 text-sm text-neutral-500">Manage your account details and sign-in password.</p>
 			</div> */}
 
@@ -60,6 +60,8 @@ export function AccountSettings() {
 						initialResetEmail={user.resetEmail ?? ""}
 						email={user.email}
 					/>
+
+					<TimeZoneForm userId={user.id} initialTimeZone={user.timeZone} />
 
 					{user.canForwardEmail && (
 						<div className="space-y-4 rounded-lg bg-white p-6">
@@ -81,19 +83,6 @@ export function AccountSettings() {
 				</div>
 			</section>
 
-			<section className="space-y-4">
-				<div>
-					<h2 className="text-xl font-semibold text-neutral-900">Security</h2>
-					<p className="mt-1 text-sm text-neutral-500">Manage how you sign in to your account.</p>
-				</div>
-				<div className="space-y-4 rounded-3xl bg-white p-6">
-					<div>
-						<h3 className="text-lg font-semibold text-neutral-900">Change password</h3>
-						<p className="mt-1 text-sm text-neutral-500">Use at least 8 characters for your new password.</p>
-					</div>
-					<ChangePasswordForm />
-				</div>
-			</section>
 		</div>
 	);
 }
