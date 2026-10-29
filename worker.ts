@@ -27,6 +27,7 @@ import { runDriveTrashRetention } from "./src/lib/drive/retention";
 import { runAccountRetention } from "./src/lib/accounts/deletion";
 import { runJmapChangeRetention } from "./src/lib/jmap/changes";
 import { runFollowUpReminders } from "./src/lib/follow-ups/service";
+import { runCalendarReminders } from "./src/lib/calendar/reminders";
 export { RealtimeHub } from "./src/lib/realtime/hub";
 
 export default {
@@ -64,7 +65,10 @@ export default {
 			}
 			// Domain routing rules are resolved here rather than in the queue because reject and
 			// forward can only be actioned on the live ForwardableEmailMessage.
-			const decision = await resolveIncomingMail(env, message.from, message.to);
+			const decision = await resolveIncomingMail(env, message.from, message.to, {
+				subject: message.headers.get("subject"),
+				alreadyForwarded: message.headers.get(MAILFLARE_FORWARDED_HEADER) === "1",
+			});
 
 			if (decision?.action === "reject") {
 				message.setReject(decision.rejectReason ?? "Message rejected by routing rule");
@@ -115,7 +119,7 @@ export default {
 				} else if (isWebhookRetryMessage(msg.body)) {
 					await processWebhookRetry(env, msg.body as WebhookRetryMessage);
 				} else if (isImportJobMessage(msg.body)) {
-					await processImportJob(env, msg.body);
+					await processImportJob(env, { ...msg.body, attempt: msg.attempts });
 				} else if (typeof msg.body === "object" && msg.body !== null && (msg.body as { kind?: unknown }).kind === "email.scheduled") {
 					await processOutboundQueue(env, msg.body as OutboundQueueMessage);
 				} else {
@@ -140,6 +144,7 @@ export default {
 		ctx.waitUntil(runAgentMaintenance(env));
 		ctx.waitUntil(runTrashRetention(env, new Date(controller.scheduledTime)));
 		ctx.waitUntil(runFollowUpReminders(env, new Date(controller.scheduledTime)));
+		ctx.waitUntil(runCalendarReminders(env, new Date(controller.scheduledTime)));
 		ctx.waitUntil(sweepImportJobs(env, new Date(controller.scheduledTime)));
 		if (controller.cron === "0 2 * * *") ctx.waitUntil(runAccountRetention(env, new Date(controller.scheduledTime)));
 		// Drive trash is emptied once a day, with the 02:00 UTC cron; the 5-minute cron is for queue-like upkeep.
